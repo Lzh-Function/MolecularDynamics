@@ -3,6 +3,7 @@ import glob
 from argparse import ArgumentParser, FileType
 import yaml
 import time
+from copy import deepcopy
 
 from rdkit import Chem
 from rdkit.Chem import AllChem, Draw
@@ -16,6 +17,8 @@ import pdbfixer
 from openff.toolkit.topology import Molecule
 from openmmforcefields.generators import GAFFTemplateGenerator, SMIRNOFFTemplateGenerator
 import mdtraj as md
+
+from mymodeller import MyModeller
 #from extract_ligand_pymol import extract_ligand
 
 
@@ -40,7 +43,7 @@ def get_args():
     args.nonbondedCutoff = (args.nonbondedCutoff / 1e-9) * unit.nanometers
     return args
 
-def process_protein(protein_file):
+def prepare_protein(protein_file,ph,metal_file=None):
     fixer = pdbfixer.PDBFixer(protein_file)
     fixer.removeHeterogens()
     fixer.findMissingResidues()
@@ -54,31 +57,45 @@ def process_protein(protein_file):
     fixer.replaceNonstandardResidues()
     fixer.findMissingAtoms()
     fixer.addMissingAtoms()
-    ph = 7.0
     fixer.addMissingHydrogens(ph)
-    return fixer
+    modeller = MyModeller(fixer.topology,fixer.positions)
 
-def extract_metal(protein_file,metal_name):
-    fixer = pdbfixer.PDBFixer(protein_file)
-    mod_metal = app.Modeller(fixer.topology,fixer.positions)
-    toDelete = []
-    for v in fixer.topology.residues():
-        if v.name != metal_name:
-            toDelete.append(v)
-    mod_metal.delete(toDelete)
-    return mod_metal
+    if metal_file != None:
+        metal_fixer = pdbfixer.PDBFixer(metal_file)
+        metal_modeller = MyModeller(metal_fixer.topology,metal_fixer.positions)
+        new_top, new_pos = add_modeller_withCharge(modeller,metal_modeller)
+        modeller = MyModeller(new_top,new_pos)
+    return modeller
 
-def process_ligand(pdb_file,ligand_file):
-    """
-    rdkit_mol = Chem.MolFromPDBFile(pdb_file)
-    ligand = Chem.rdmolops.SplitMolByPDBResidues(rdkit_mol)["LG1"]
-    ligand = Chem.RemoveHs(ligand)
-    reference = Chem.MolFromSmiles(smiles)
-    prepared_ligand = AllChem.AssignBondOrdersFromTemplate(reference,ligand)
-    prepared_ligand.AddConformer(ligand.GetConformer(0))
-    prepared_ligand = Chem.rdmolops.AddHs(prepared_ligand,addCoords=True)
-    prepared_ligand = Chem.MolFromMolBlock(Chem.MolToMolBlock(prepared_ligand))
-    """
+def _add_modeller_withCharge(topology,positions,addModeller):
+    atop = addModeller.topology
+    apos = addModeller.positions
+
+    newAtoms = {}
+    for chain in atop.chains():
+        newChain = topology.addChain(chain.id)
+        for residue in chain.residues():
+            newResidue = topology.addResidue(residue.name, newChain, residue.id, residue.insertionCode)
+            for atom in residue.atoms():
+                newAtom = topology.addAtom(atom.name, atom.element, newResidue, atom.id, atom.formalCharge)
+                newAtoms[atom] = newAtom
+                positions.append(deepcopy(apos[atom.index]))
+    for bond in atop.bonds():
+        topology.addBond(newAtoms[bond[0]], newAtoms[bond[1]], bond.type, bond.order)
+    
+    return topology, positions
+
+def add_modeller_withCharge(*addModeller):
+    new_top = app.Topology()
+    new_pos = [] * unit.nanometers
+
+    for i,v in enumerate(addModeller):
+        if i == 0:
+            new_top.setPeriodicBoxVectors(v.topology.getPeriodicBoxVectors())
+        new_top, new_pos = _add_modeller_withCharge(new_top,new_pos,v)
+    return new_top, new_pos
+
+def prepare_ligand(pdb_file,ligand_file):
     rdkit_mol = Chem.MolFromPDBFile(pdb_file)
     prepared_ligand = Chem.SDMolSupplier(ligand_file)
     prepared_ligand = [v for v in prepared_ligand if v != 0][0]
@@ -95,45 +112,26 @@ def process_ligand(pdb_file,ligand_file):
         off_atom.name = element + str(element_counter_dict[element])     
     off_mol_topology = off_mol.to_topology()
     mol_topology = off_mol_topology.to_openmm()
-    mol_positions = off_mol.conformers[0].to("nanometers")
-    mod_mol = app.Modeller(mol_topology,mol_positions)
-    return mod_mol, off_mol         
+    mol_positions = off_mol.conformers[0].to_openmm()
+    mod_mol = MyModeller(mol_topology,mol_positions)
+    return mod_mol, off_mol   
 
-def complex(*object):
-    topology = [md.Topology.from_openmm(v.topology) for v in object]
-    complex_top = topology[0]
-    for v in topology[1:]:
-        complex_top = complex_top.join(v)
-    atoms = [len(v.positions) for v in object]
-    complex_pos = unit.Quantity(np.zeros([sum(atoms),3]), unit=unit.nanometers)
-    k = 0
-    for v,w in zip(object,atoms):
-        complex_pos[k:k+w] = v.positions
-        k += w
-    return complex_top, complex_pos
-
-def prep_model(args,complex_top,complex_pos,off_mol,write_file=""):
-    FF = app.ForceField(*args.forcefield)
+def prep_model(args,top,pos,off_mol,write_file="complex_model"):
+    FF = app.ForceField(args.protein_ff,args.solvent_ff)
     smff = SMIRNOFFTemplateGenerator(molecules=off_mol)
     FF.registerTemplateGenerator(smff.generator)
-    model = app.Modeller(complex_top.to_openmm(),complex_pos)
+    model = MyModeller(top,pos)
     model.addSolvent(FF,padding=args.padding,ionicStrength=args.ionicStrength * unit.molar)
     if len(write_file) > 0:
         app.PDBFile.writeFile(model.getTopology(),model.getPositions(),open("data/{}.pdb".format(write_file),"w"))
     return model, FF
 
 def process(args,ligand_file):
-    fixer = process_protein(args.protein_file)
-    mod_mol, off_mol = process_ligand(args.protein_file,ligand_file)
-    if args.metal:
-        mod_metal = extract_metal(args.protein_file,args.metal_name)
-        top, pos = complex(fixer,mod_mol,mod_metal)
-    else:
-        top, pos = complex(fixer,mod_mol)
-
+    mod_pro = prepare_protein(args.protein_file,args.ph,args.metal_file)
+    mod_mol, off_mol = prepare_ligand(args.protein_file,ligand_file)
+    top, pos = add_modeller_withCharge(mod_pro,mod_mol)
     model, FF = prep_model(args,top,pos,off_mol)
     return model, FF
-
 
 def run(args,model,FF,result_dir):
     platform = mm.Platform.getPlatformByName("CUDA" if args.cuda else "cpu")
@@ -191,9 +189,12 @@ def run(args,model,FF,result_dir):
     s = elapse % 60
     print(f"equilibration - simulation elapsed time: {h} h {m} min {s} sec")
 
+
+
 def main():
+    # make metal ion file in advance
     args = get_args()
-    ligand_path = glob.glob("ligand/*.sdf")[5:]
+    ligand_path = glob.glob("ligand/*.sdf")
     idx = [v.split(".")[0].split("_")[-1] for v in ligand_path]
     for v,w in zip(ligand_path,idx):
         result_dir = "result/{}".format(w)
