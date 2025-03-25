@@ -68,3 +68,5 @@ gmx trjconv -s md_0_10.tpr -f md_0_10.xtc -o md_0_10_center.xtc -center -pbc mol
 # 参考は https://zenn.dev/labcode/articles/d3d109d8a7cd0e#gmx_mmpbsa%E3%81%AE%E7%92%B0%E5%A2%83%E6%A7%8B%E7%AF%89
 # https://valdes-tresanco-ms.github.io/gmx_MMPBSA/dev/examples/Protein_ligand/ST/
 gmx_MMPBSA --create_input gb pb ala decomp
+
+# 可視化は em.gro と md_0_10_center.xtc を PyMOL で読み込ませる
