@@ -1,0 +1,7 @@
+
+ NSTEP =        0   TIME(PS) =       0.000  TEMP(K) =     0.15  PRESS =     0.0
+ Etot   =   -461084.8880  EKtot   =        21.4755  EPtot      =   -461106.3635
+ BOND   =       230.9999  ANGLE   =       879.7692  DIHED      =      1519.7269
+ UB     =         0.0000  IMP     =         0.0000  CMAP       =       315.0505
+ 1-4 NB =      1183.3933  1-4 EEL =     15971.9647  VDWAALS    =     71834.5164
+ EELEC  =   -553041.7844  EHBOND  =         0.0000  RESTRAINT  =         0.0000

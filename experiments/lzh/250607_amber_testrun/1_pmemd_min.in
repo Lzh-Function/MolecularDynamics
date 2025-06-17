@@ -1,0 +1,5 @@
+HDAC2-vorinostat 7zzs run
+ &cntrl
+  imin=1, maxcyc=500,
+  ntpr=5,
+ /

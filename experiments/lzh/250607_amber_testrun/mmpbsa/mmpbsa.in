@@ -1,0 +1,15 @@
+&general
+    endframe=5000,
+    verbose=2,
+    keep_files=0,
+    strip_mask=":WAT:Na+:Cl-",
+/
+&gb
+    igb=5,
+    saltcon=0.150,
+/
+&pb
+    istrng=0.150,
+    inp=2,
+    radiopt=0,
+/
